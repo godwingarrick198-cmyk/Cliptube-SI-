@@ -1,0 +1,3 @@
+-- Applied to Supabase project pqlffdmwamyhfzfhdgcb
+-- Core schema: profiles, niches, processing_jobs, discovered_videos.
+-- Source of truth is the live Supabase migration history.
