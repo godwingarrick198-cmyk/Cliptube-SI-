@@ -120,6 +120,11 @@ def process(job: dict[str, Any]) -> None:
         return
 
     try:
+        previous = supabase.table("clips").select("storage_path").eq("job_id", job_id).execute()
+        old_paths = [row["storage_path"] for row in (previous.data or []) if row.get("storage_path")]
+        if old_paths:
+            supabase.storage.from_("rendered-clips").remove(old_paths)
+        supabase.table("clips").delete().eq("job_id", job_id).execute()
         path = job.get("source_storage_path")
         if not path or not job.get("permission_confirmed"):
             raise RuntimeError("A private source upload and permission confirmation are required.")
@@ -266,8 +271,35 @@ def publish_approved_clip() -> bool:
     return True
 
 
+
+def refresh_published_views() -> None:
+    response = supabase.table("clips").select("id,user_id,youtube_video_id").eq("status", "published").not_.is_("youtube_video_id", "null").limit(500).execute()
+    rows = response.data or []
+    grouped: dict[str, list[dict[str, Any]]] = {}
+    for row in rows:
+        grouped.setdefault(row["user_id"], []).append(row)
+    for user_id, clips in grouped.items():
+        try:
+            connection = supabase.table("youtube_connections").select("refresh_token_encrypted").eq("user_id", user_id).single().execute()
+            token = decrypt_refresh_token(connection.data["refresh_token_encrypted"])
+            access = refresh_google_access_token(token)
+            ids = [clip["youtube_video_id"] for clip in clips if clip.get("youtube_video_id")]
+            for offset in range(0, len(ids), 50):
+                batch = ids[offset:offset + 50]
+                url = "https://www.googleapis.com/youtube/v3/videos?part=statistics&id=" + urllib.parse.quote(",".join(batch))
+                request = urllib.request.Request(url, headers={"Authorization": f"Bearer {access}"})
+                with urllib.request.urlopen(request, timeout=45) as result:
+                    payload = json.loads(result.read().decode())
+                for item in payload.get("items", []):
+                    count = int(item.get("statistics", {}).get("viewCount", 0))
+                    supabase.table("clips").update({"view_count": count}).eq("youtube_video_id", item["id"]).eq("user_id", user_id).execute()
+        except Exception as exc:
+            print(f"Analytics refresh failed for user {user_id}: {exc}", flush=True)
+
+
 def main() -> None:
     print(f"Cliptube worker online; Whisper model={MODEL_NAME}")
+    last_analytics_refresh = 0.0
     while True:
         try:
             response = supabase.table("processing_jobs").select(
@@ -278,6 +310,9 @@ def main() -> None:
                 continue
             if publish_approved_clip():
                 continue
+            if time.time() - last_analytics_refresh >= 3600:
+                refresh_published_views()
+                last_analytics_refresh = time.time()
             time.sleep(POLL_SECONDS)
         except Exception as exc:
             print(f"Worker loop error: {exc}", flush=True)
