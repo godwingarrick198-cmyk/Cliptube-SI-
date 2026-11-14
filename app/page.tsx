@@ -4,6 +4,7 @@ import { useMemo, useState } from "react";
 
 type WorkflowStatus = "Draft" | "Running (demo)" | "Paused (demo)" | "Stopped";
 type Workflow = { niche: string; country: string; limit: number; sourceUrl: string };
+type VideoResult = { videoId: string; title: string; description: string; channelTitle: string; publishedAt: string; thumbnail: string; url: string };
 
 export default function Home() {
   const [form, setForm] = useState<Workflow>({ niche: "", country: "Worldwide", limit: 10, sourceUrl: "" });
@@ -12,12 +13,41 @@ export default function Home() {
   const [saved, setSaved] = useState<Workflow | null>(null);
   const [notice, setNotice] = useState("Create a workflow draft to preview your setup. Nothing is processed or published yet.");
   const [activeTab, setActiveTab] = useState("Overview");
+  const [videos, setVideos] = useState<VideoResult[]>([]);
+  const [searching, setSearching] = useState(false);
+  const [searchError, setSearchError] = useState("");
+  const [searchedFor, setSearchedFor] = useState("");
 
   const canSave = form.niche.trim().length > 1;
   const sourceHost = useMemo(() => {
     if (!form.sourceUrl.trim()) return "No source added";
     try { return new URL(form.sourceUrl).hostname; } catch { return "Enter a valid URL"; }
   }, [form.sourceUrl]);
+
+  async function discoverVideos() {
+    const query = form.niche.trim();
+    if (query.length < 2) { setSearchError("Enter a topic with at least 2 characters."); return; }
+    setSearching(true);
+    setSearchError("");
+    setVideos([]);
+    setSearchedFor(query);
+    try {
+      const params = new URLSearchParams({ q: query, maxResults: String(form.limit) });
+      if (form.country !== "Worldwide") {
+        const regionCodes: Record<string, string> = { "United States": "US", "United Kingdom": "GB", Nigeria: "NG", Canada: "CA", India: "IN" };
+        params.set("regionCode", regionCodes[form.country] || "US");
+      }
+      const response = await fetch(`/api/youtube/discover?${params.toString()}`, { cache: "no-store" });
+      const data = await response.json();
+      if (!response.ok) throw new Error(data.error || "YouTube discovery failed.");
+      setVideos(data.videos || []);
+      if (!data.videos?.length) setSearchError("No matching public videos were found. Try a broader topic.");
+    } catch (error) {
+      setSearchError(error instanceof Error ? error.message : "Something went wrong while searching YouTube.");
+    } finally {
+      setSearching(false);
+    }
+  }
 
   function saveDraft() {
     if (!canSave) { setNotice("Add a niche with at least 2 characters."); return; }
@@ -70,7 +100,9 @@ export default function Home() {
             <input className="field" aria-label="Optional source video URL" value={form.sourceUrl} onChange={e => setForm({...form,sourceUrl:e.target.value})} placeholder="https://www.youtube.com/watch?v=..." inputMode="url"/>
             <div className="field-hint">Only submit videos you own, have licensed, or have explicit permission to process. Public discovery is metadata-only.</div>
             <label className="permission-row"><input type="checkbox" checked={permissionConfirmed} onChange={e => setPermissionConfirmed(e.target.checked)}/><span>I will only process content I own or am authorised to use.</span></label>
-            <button className="primary-button" onClick={saveDraft} disabled={!canSave || !permissionConfirmed}>Save workflow draft <span>→</span></button>
+            <button className="primary-button" onClick={discoverVideos} disabled={!canSave || searching}>{searching ? "Searching YouTube…" : "Discover public videos"} <span>⌕</span></button>
+            <p className="button-note">Searches public YouTube metadata only. It does not download or process videos.</p>
+            <button className="secondary-button" onClick={saveDraft} disabled={!canSave || !permissionConfirmed}>Save workflow draft <span>→</span></button>
             <p className="button-note">Saves locally for this preview. No video is downloaded or processed.</p>
           </article>
 
@@ -83,6 +115,17 @@ export default function Home() {
             <div className="summary-line"><span>Permission declaration</span><strong className={permissionConfirmed ? "good-text" : "muted-text"}>{permissionConfirmed ? "Confirmed" : "Not confirmed"}</strong></div>
             <div className="summary-footer"><span className="status-dot" /> {saved ? "Draft saved in this session" : "Waiting for setup"}</div>
           </aside>
+        </section>
+
+        <section className="panel results-panel" aria-live="polite">
+          <div className="panel-heading"><div><span className="panel-kicker">YOUTUBE DATA API V3</span><h3>Discovery results</h3><p>{searchedFor ? `Public videos matching “${searchedFor}”` : "Search a topic to retrieve real public YouTube video metadata."}</p></div><span className="empty-count">{videos.length} RESULTS</span></div>
+          {searching && <div className="search-state">Searching YouTube…</div>}
+          {searchError && <div className="search-error" role="alert">{searchError}</div>}
+          {!searching && !searchError && videos.length === 0 && <div className="search-state">Your search results will appear here.</div>}
+          {videos.length > 0 && <div className="video-results">{videos.map(video => <article className="video-result" key={video.videoId}>
+            <a className="video-thumb" href={video.url} target="_blank" rel="noreferrer"><img src={video.thumbnail} alt="" loading="lazy"/><span>▶</span></a>
+            <div className="video-info"><a href={video.url} target="_blank" rel="noreferrer" className="video-title">{video.title}</a><div className="video-channel">{video.channelTitle} · {new Date(video.publishedAt).toLocaleDateString()}</div><p>{video.description || "No description provided."}</p><a className="video-open" href={video.url} target="_blank" rel="noreferrer">Open on YouTube ↗</a></div>
+          </article>)}</div>}
         </section>
 
         <section className="panel controls-panel" id="sources">
