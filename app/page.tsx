@@ -2,7 +2,7 @@
 
 import { FormEvent, useCallback, useEffect, useState } from "react";
 import type { Session } from "@supabase/supabase-js";
-import { supabase } from "@/lib/supabase";
+import { supabase } from "../lib/supabase";
 
 type Video = { videoId: string; title: string; description: string; channelTitle: string; publishedAt: string; thumbnail: string; url: string };
 type Job = { id: string; status: string; stage: string; progress: number; error_message?: string | null; source_video_url?: string | null; config?: { niche?: string } ; created_at: string };
