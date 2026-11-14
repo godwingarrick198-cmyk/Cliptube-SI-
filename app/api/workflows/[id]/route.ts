@@ -23,12 +23,11 @@ export async function PATCH(request: NextRequest, context: { params: Promise<{ i
   if (readError || !existing) return NextResponse.json({ error: "Workflow not found." }, { status: 404 });
   if (action === "start" || action === "resume") {
     if (!existing.source_storage_path || existing.permission_confirmed !== true) {
-      return NextResponse.json({ error: "Add a source video you own or are authorised to use, then confirm permission." }, { status: 400 });
+      return NextResponse.json({ error: "Upload a source video you own or are authorised to use, then confirm permission." }, { status: 400 });
     }
-    return NextResponse.json({ error: "The processing worker is not connected yet. Your workflow is saved, but transcription and rendering cannot start until a worker is deployed." }, { status: 409 });
   }
   const { data, error } = await auth.supabase.from("processing_jobs")
-    .update({ status: next.status, stage: next.stage, updated_at: new Date().toISOString() })
+    .update({ status: next.status, stage: next.stage, progress: 0, updated_at: new Date().toISOString() })
     .eq("id", id).select("id,status,stage,progress,updated_at").single();
   if (error || !data) return NextResponse.json({ error: "Could not update this workflow." }, { status: 500 });
   return NextResponse.json({ workflow: data });
