@@ -3,10 +3,15 @@ import re
 import time
 import tempfile
 import subprocess
+import base64
+import json
+import urllib.parse
+import urllib.request
 from pathlib import Path
 from typing import Any
 
 from faster_whisper import WhisperModel
+from cryptography.hazmat.primitives.ciphers.aead import AESGCM
 from supabase import create_client
 
 SUPABASE_URL = os.environ["SUPABASE_URL"]
@@ -14,6 +19,9 @@ SUPABASE_SERVICE_ROLE_KEY = os.environ["SUPABASE_SERVICE_ROLE_KEY"]
 POLL_SECONDS = int(os.getenv("WORKER_POLL_SECONDS", "12"))
 MODEL_NAME = os.getenv("WHISPER_MODEL", "base")
 MAX_CLIPS = int(os.getenv("MAX_CLIPS_PER_VIDEO", "3"))
+GOOGLE_CLIENT_ID = os.getenv("GOOGLE_CLIENT_ID", "")
+GOOGLE_CLIENT_SECRET = os.getenv("GOOGLE_CLIENT_SECRET", "")
+TOKEN_KEY = os.getenv("GOOGLE_TOKEN_ENCRYPTION_KEY", "")
 
 supabase = create_client(SUPABASE_URL, SUPABASE_SERVICE_ROLE_KEY)
 model = WhisperModel(MODEL_NAME, device="cpu", compute_type="int8")
@@ -149,6 +157,103 @@ def process(job: dict[str, Any]) -> None:
         update_job(job_id, status="failed", stage="failed", error_message=str(exc)[:1000])
 
 
+
+def decrypt_refresh_token(value: str) -> str:
+    if not TOKEN_KEY:
+        raise RuntimeError("GOOGLE_TOKEN_ENCRYPTION_KEY is not configured on the worker.")
+    iv_part, encrypted_part = value.split(".", 1)
+    key = base64.b64decode(TOKEN_KEY)
+    nonce = base64.urlsafe_b64decode(iv_part + "=" * (-len(iv_part) % 4))
+    ciphertext = base64.urlsafe_b64decode(encrypted_part + "=" * (-len(encrypted_part) % 4))
+    return AESGCM(key).decrypt(nonce, ciphertext, None).decode("utf-8")
+
+
+def refresh_google_access_token(refresh_token: str) -> str:
+    payload = urllib.parse.urlencode({
+        "client_id": GOOGLE_CLIENT_ID,
+        "client_secret": GOOGLE_CLIENT_SECRET,
+        "refresh_token": refresh_token,
+        "grant_type": "refresh_token",
+    }).encode()
+    request = urllib.request.Request("https://oauth2.googleapis.com/token", data=payload, headers={"Content-Type": "application/x-www-form-urlencoded"}, method="POST")
+    with urllib.request.urlopen(request, timeout=45) as response:
+        data = json.loads(response.read().decode())
+    if not data.get("access_token"):
+        raise RuntimeError("Google did not return an access token.")
+    return data["access_token"]
+
+
+def upload_to_youtube(access_token: str, clip_path: Path, title: str, description: str) -> str:
+    video_bytes = clip_path.read_bytes()
+    metadata = {
+        "snippet": {"title": title[:95], "description": description[:4500], "categoryId": "22"},
+        "status": {"privacyStatus": "unlisted", "selfDeclaredMadeForKids": False},
+    }
+    init_url = "https://www.googleapis.com/upload/youtube/v3/videos?uploadType=resumable&part=snippet,status"
+    init_request = urllib.request.Request(
+        init_url, data=json.dumps(metadata).encode(),
+        headers={
+            "Authorization": f"Bearer {access_token}",
+            "Content-Type": "application/json; charset=UTF-8",
+            "X-Upload-Content-Type": "video/mp4",
+            "X-Upload-Content-Length": str(len(video_bytes)),
+        }, method="POST",
+    )
+    with urllib.request.urlopen(init_request, timeout=60) as response:
+        upload_url = response.headers.get("Location")
+    if not upload_url:
+        raise RuntimeError("Google did not return a resumable upload URL.")
+    upload_request = urllib.request.Request(
+        upload_url, data=video_bytes,
+        headers={"Authorization": f"Bearer {access_token}", "Content-Type": "video/mp4", "Content-Length": str(len(video_bytes))},
+        method="PUT",
+    )
+    with urllib.request.urlopen(upload_request, timeout=600) as response:
+        uploaded = json.loads(response.read().decode())
+    if not uploaded.get("id"):
+        raise RuntimeError("YouTube upload completed without returning a video ID.")
+    return uploaded["id"]
+
+
+def publish_approved_clip() -> bool:
+    response = supabase.table("clips").select(
+        "id,user_id,job_id,title,transcript,storage_path,status"
+    ).eq("status", "approved").order("created_at").limit(1).execute()
+    if not response.data:
+        return False
+    clip = response.data[0]
+    claim = supabase.table("clips").update({"status": "publishing"}).eq("id", clip["id"]).eq("status", "approved").execute()
+    if not claim.data:
+        return True
+    try:
+        connection = supabase.table("youtube_connections").select(
+            "refresh_token_encrypted"
+        ).eq("user_id", clip["user_id"]).single().execute()
+        encrypted = connection.data["refresh_token_encrypted"]
+        refresh_token = decrypt_refresh_token(encrypted)
+        access_token = refresh_google_access_token(refresh_token)
+        with tempfile.TemporaryDirectory(prefix="cliptube-publish-") as temp:
+            local_clip = Path(temp) / "approved-clip.mp4"
+            local_clip.write_bytes(supabase.storage.from_("rendered-clips").download(clip["storage_path"]))
+            youtube_id = upload_to_youtube(
+                access_token, local_clip, clip["title"],
+                (clip.get("transcript") or "")[:4500] + "\\n\\nCreated with Cliptube SI",
+            )
+        supabase.table("clips").update({
+            "status": "published", "youtube_video_id": youtube_id, "view_count": 0,
+        }).eq("id", clip["id"]).execute()
+        if clip.get("job_id"):
+            remaining = supabase.table("clips").select("id", count="exact").eq("job_id", clip["job_id"]).not_.in_("status", ["published", "rejected"]).execute()
+            if (remaining.count or 0) == 0:
+                update_job(clip["job_id"], status="completed", stage="published", progress=100)
+    except Exception as exc:
+        message = str(exc)
+        status = "awaiting_youtube_connection" if "refresh_token_encrypted" in message else "failed"
+        supabase.table("clips").update({"status": status}).eq("id", clip["id"]).execute()
+        print(f"Clip publish error {clip['id']}: {message}", flush=True)
+    return True
+
+
 def main() -> None:
     print(f"Cliptube worker online; Whisper model={MODEL_NAME}")
     while True:
@@ -158,8 +263,10 @@ def main() -> None:
             ).eq("status", "queued").order("created_at").limit(1).execute()
             if response.data:
                 process(response.data[0])
-            else:
-                time.sleep(POLL_SECONDS)
+                continue
+            if publish_approved_clip():
+                continue
+            time.sleep(POLL_SECONDS)
         except Exception as exc:
             print(f"Worker loop error: {exc}", flush=True)
             time.sleep(POLL_SECONDS)
