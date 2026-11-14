@@ -12,6 +12,7 @@ export async function PATCH(request: NextRequest, context: { params: Promise<{ i
   const action = String(body.action || "");
   const transitions: Record<string, { status: string; stage: string }> = {
     start: { status: "queued", stage: "waiting_for_processing_worker" },
+    retry: { status: "queued", stage: "retry_waiting_for_processing_worker" },
     pause: { status: "paused", stage: "paused_by_user" },
     resume: { status: "queued", stage: "waiting_for_processing_worker" },
     stop: { status: "cancelled", stage: "cancelled_by_user" },
@@ -22,13 +23,13 @@ export async function PATCH(request: NextRequest, context: { params: Promise<{ i
     .select("id,status,source_video_url,source_storage_path,permission_confirmed").eq("id", id).single();
   if (readError || !existing) return NextResponse.json({ error: "Workflow not found." }, { status: 404 });
   const allowedFrom: Record<string, string[]> = {
-    start: ["draft"], pause: ["queued", "processing", "running"],
+    start: ["draft"], retry: ["failed"], pause: ["queued", "processing", "running"],
     resume: ["paused"], stop: ["draft", "queued", "processing", "running", "paused", "awaiting_approval"],
   };
   if (!allowedFrom[action]?.includes(existing.status)) {
     return NextResponse.json({ error: `Cannot ${action} a workflow while it is ${existing.status}.` }, { status: 409 });
   }
-  if (action === "start" || action === "resume") {
+  if (action === "start" || action === "resume" || action === "retry") {
     if (!existing.source_storage_path || existing.permission_confirmed !== true) {
       return NextResponse.json({ error: "Upload a source video you own or are authorised to use, then confirm permission." }, { status: 400 });
     }
