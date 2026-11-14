@@ -1,144 +1,178 @@
 "use client";
 
-import { useMemo, useState } from "react";
+import { FormEvent, useCallback, useEffect, useState } from "react";
+import type { Session } from "@supabase/supabase-js";
+import { supabase } from "@/lib/supabase";
 
-type WorkflowStatus = "Draft" | "Running (demo)" | "Paused (demo)" | "Stopped";
-type Workflow = { niche: string; country: string; limit: number; sourceUrl: string };
-type VideoResult = { videoId: string; title: string; description: string; channelTitle: string; publishedAt: string; thumbnail: string; url: string };
+type Video = { videoId: string; title: string; description: string; channelTitle: string; publishedAt: string; thumbnail: string; url: string };
+type Job = { id: string; status: string; stage: string; progress: number; error_message?: string | null; source_video_url?: string | null; config?: { niche?: string } ; created_at: string };
+type Metrics = { videosDiscovered: number; clipsCreated: number; shortsPublished: number; viewsTracked: number; jobs: Job[] };
+
+const regions: Record<string,string> = { "United States":"US", "United Kingdom":"GB", Nigeria:"NG", Canada:"CA", India:"IN", Australia:"AU", "South Africa":"ZA" };
 
 export default function Home() {
-  const [form, setForm] = useState<Workflow>({ niche: "", country: "Worldwide", limit: 10, sourceUrl: "" });
-  const [permissionConfirmed, setPermissionConfirmed] = useState(false);
-  const [status, setStatus] = useState<WorkflowStatus>("Draft");
-  const [saved, setSaved] = useState<Workflow | null>(null);
-  const [notice, setNotice] = useState("Create a workflow draft to preview your setup. Nothing is processed or published yet.");
-  const [activeTab, setActiveTab] = useState("Overview");
-  const [videos, setVideos] = useState<VideoResult[]>([]);
-  const [searching, setSearching] = useState(false);
-  const [searchError, setSearchError] = useState("");
-  const [searchedFor, setSearchedFor] = useState("");
+  const [session, setSession] = useState<Session | null>(null);
+  const [authReady, setAuthReady] = useState(false);
+  const [email, setEmail] = useState("");
+  const [authMessage, setAuthMessage] = useState("");
+  const [authBusy, setAuthBusy] = useState(false);
+  const [niche, setNiche] = useState("");
+  const [country, setCountry] = useState("Worldwide");
+  const [limit, setLimit] = useState(10);
+  const [sourceUrl, setSourceUrl] = useState("");
+  const [permission, setPermission] = useState(false);
+  const [videos, setVideos] = useState<Video[]>([]);
+  const [jobs, setJobs] = useState<Job[]>([]);
+  const [metrics, setMetrics] = useState<Metrics>({ videosDiscovered: 0, clipsCreated: 0, shortsPublished: 0, viewsTracked: 0, jobs: [] });
+  const [busy, setBusy] = useState(false);
+  const [message, setMessage] = useState("");
+  const [error, setError] = useState("");
+  const [searched, setSearched] = useState("");
 
-  const canSave = form.niche.trim().length > 1;
-  const sourceHost = useMemo(() => {
-    if (!form.sourceUrl.trim()) return "No source added";
-    try { return new URL(form.sourceUrl).hostname; } catch { return "Enter a valid URL"; }
-  }, [form.sourceUrl]);
+  const api = useCallback(async (path: string, init: RequestInit = {}) => {
+    if (!session?.access_token) throw new Error("Your session expired. Sign in again.");
+    const response = await fetch(path, {
+      ...init,
+      headers: { "Content-Type": "application/json", Authorization: `Bearer ${session.access_token}`, ...(init.headers || {}) },
+      cache: "no-store",
+    });
+    const data = await response.json().catch(() => ({}));
+    if (!response.ok) throw new Error(data.error || "Request failed.");
+    return data;
+  }, [session]);
 
-  async function discoverVideos() {
-    const query = form.niche.trim();
-    if (query.length < 2) { setSearchError("Enter a topic with at least 2 characters."); return; }
-    setSearching(true);
-    setSearchError("");
-    setVideos([]);
-    setSearchedFor(query);
+  const loadData = useCallback(async () => {
+    if (!session) return;
     try {
-      const params = new URLSearchParams({ q: query, maxResults: String(form.limit) });
-      if (form.country !== "Worldwide") {
-        const regionCodes: Record<string, string> = { "United States": "US", "United Kingdom": "GB", Nigeria: "NG", Canada: "CA", India: "IN" };
-        params.set("regionCode", regionCodes[form.country] || "US");
-      }
+      const [workflowData, analyticsData] = await Promise.all([api("/api/workflows"), api("/api/analytics")]);
+      setJobs(workflowData.workflows || []);
+      setMetrics(analyticsData);
+    } catch (e) {
+      setError(e instanceof Error ? e.message : "Could not load your workspace.");
+    }
+  }, [api, session]);
+
+  useEffect(() => {
+    let alive = true;
+    supabase.auth.getSession().then(({ data }) => {
+      if (alive) { setSession(data.session); setAuthReady(true); }
+    });
+    const { data: listener } = supabase.auth.onAuthStateChange((_event, next) => setSession(next));
+    return () => { alive = false; listener.subscription.unsubscribe(); };
+  }, []);
+
+  useEffect(() => { if (session) loadData(); }, [session, loadData]);
+
+  async function signIn(event: FormEvent) {
+    event.preventDefault();
+    setAuthBusy(true); setAuthMessage("");
+    const { error: signInError } = await supabase.auth.signInWithOtp({
+      email: email.trim(),
+      options: { emailRedirectTo: window.location.origin },
+    });
+    setAuthMessage(signInError ? signInError.message : "Magic link sent. Open the email on this device to sign in.");
+    setAuthBusy(false);
+  }
+
+  async function discover() {
+    if (niche.trim().length < 2) { setError("Enter a topic with at least 2 characters."); return; }
+    setBusy(true); setError(""); setMessage(""); setVideos([]); setSearched(niche.trim());
+    try {
+      const params = new URLSearchParams({ q: niche.trim(), maxResults: String(limit) });
+      if (regions[country]) params.set("regionCode", regions[country]);
       const response = await fetch(`/api/youtube/discover?${params.toString()}`, { cache: "no-store" });
       const data = await response.json();
-      if (!response.ok) throw new Error(data.error || "YouTube discovery failed.");
+      if (!response.ok) throw new Error(data.error || "YouTube search failed.");
       setVideos(data.videos || []);
-      if (!data.videos?.length) setSearchError("No matching public videos were found. Try a broader topic.");
-    } catch (error) {
-      setSearchError(error instanceof Error ? error.message : "Something went wrong while searching YouTube.");
-    } finally {
-      setSearching(false);
-    }
+      if (data.videos?.length) {
+        try { await api("/api/discovered-videos", { method: "POST", body: JSON.stringify({ videos: data.videos }) }); await loadData(); }
+        catch (saveError) { setMessage(saveError instanceof Error ? saveError.message : "Results shown but not saved."); }
+      } else setMessage("No public videos matched. Try another topic.");
+    } catch (e) { setError(e instanceof Error ? e.message : "Discovery failed."); }
+    finally { setBusy(false); }
   }
 
-  function saveDraft() {
-    if (!canSave) { setNotice("Add a niche with at least 2 characters."); return; }
-    if (form.sourceUrl && sourceHost === "Enter a valid URL") { setNotice("Enter a valid source URL or leave it blank."); return; }
-    setSaved({ ...form });
-    setStatus("Draft");
-    setNotice("Draft saved in this browser session only. It has not been sent to Supabase.");
+  async function saveWorkflow() {
+    setBusy(true); setError(""); setMessage("");
+    try {
+      const data = await api("/api/workflows", { method: "POST", body: JSON.stringify({ niche, country, limit, sourceUrl, permissionConfirmed: permission }) });
+      setJobs(current => [data.workflow, ...current]);
+      setMessage("Workflow saved to your account. Processing is not started.");
+      await loadData();
+    } catch (e) { setError(e instanceof Error ? e.message : "Could not save workflow."); }
+    finally { setBusy(false); }
   }
 
-  function demoStatus(next: WorkflowStatus) {
-    if (!saved) { setNotice("Save a workflow draft first."); return; }
-    setStatus(next);
-    setNotice("Demo control only: no background job has started, paused, or stopped.");
+  async function controlJob(id: string, action: string) {
+    setError(""); setMessage("");
+    try {
+      await api(`/api/workflows/${id}`, { method: "PATCH", body: JSON.stringify({ action }) });
+      setMessage(action === "stop" ? "Workflow stopped." : "Workflow updated.");
+      await loadData();
+    } catch (e) { setError(e instanceof Error ? e.message : "Workflow action failed."); }
   }
 
-  const nav = ["Overview", "Workflow", "Sources", "Activity"];
+  if (!authReady) return <main className="auth-screen"><div className="auth-card"><div className="brand-mark">C</div><h1>Cliptube <b>SI</b></h1><p>Loading your secure workspace…</p></div></main>;
+
+  if (!session) return (
+    <main className="auth-screen">
+      <form className="auth-card" onSubmit={signIn}>
+        <div className="brand-mark">C</div><div className="eyebrow">YOUR SHORTS WORKSPACE</div>
+        <h1>Cliptube <b>SI</b></h1><p>Sign in with a secure email link to save discoveries and workflows to your account.</p>
+        <label className="field-label" htmlFor="email">Email address</label>
+        <input id="email" className="field" type="email" autoComplete="email" required value={email} onChange={e=>setEmail(e.target.value)} placeholder="you@example.com"/>
+        <button className="primary-button" disabled={authBusy}>{authBusy ? "Sending link…" : "Send sign-in link"} <span>→</span></button>
+        {authMessage && <p className="inline-notice" role="status">{authMessage}</p>}
+        <small>Cliptube SI uses Supabase email authentication. Check your inbox and spam folder.</small>
+      </form>
+    </main>
+  );
+
   return (
     <main className="app-shell">
       <aside className="sidebar">
-        <a className="brand" href="#overview" aria-label="Cliptube SI home"><span className="brand-mark">C</span><span>cliptube <b>SI</b><small>SHORTS WORKSPACE</small></span></a>
+        <a className="brand" href="#overview"><span className="brand-mark">C</span><span>cliptube <b>SI</b><small>SHORTS WORKSPACE</small></span></a>
         <div className="side-label">WORKSPACE</div>
-        <nav className="side-nav" aria-label="Main navigation">
-          {nav.map((item, i) => <a key={item} className={activeTab === item ? "nav-item active" : "nav-item"} href={`#${item.toLowerCase()}`} onClick={() => setActiveTab(item)}><span className="nav-icon">{["⌂", "◈", "◎", "≡"][i]}</span>{item}</a>)}
-        </nav>
-        <div className="sidebar-bottom"><div className="plan-card"><span className="plan-dot" /> BUILD MODE <p>Version 2 interface</p><small>Backend features are not connected yet.</small></div><div className="profile"><div className="avatar">G</div><div><strong>Workspace</strong><small>Local preview</small></div></div></div>
+        <nav className="side-nav"><a className="nav-item active" href="#overview">⌂ Overview</a><a className="nav-item" href="#workflow">◈ Workflow</a><a className="nav-item" href="#discovery">◎ Discovery</a><a className="nav-item" href="#activity">≡ Activity</a></nav>
+        <div className="sidebar-bottom"><div className="plan-card"><span className="plan-dot"/> LIVE WORKSPACE<p>Account connected</p><small>Processing worker is not deployed yet.</small></div><div className="profile"><div className="avatar">{session.user.email?.[0]?.toUpperCase() || "U"}</div><div><strong>{session.user.email}</strong><small>Signed in</small></div></div><button className="signout-button" onClick={()=>supabase.auth.signOut()}>Sign out</button></div>
       </aside>
-
       <section className="content" id="overview">
-        <header className="mobile-header"><a className="brand" href="#overview"><span className="brand-mark">C</span><span>cliptube <b>SI</b></span></a><span className="demo-pill">DEMO MODE</span></header>
-        <header className="page-header"><div><div className="eyebrow">YOUR CONTENT WORKSPACE</div><h1>Overview</h1><p>Set up a clipping workflow and keep track of its progress.</p></div><div className="header-status"><span className="status-dot" /> {status}</div></header>
-
-        <section className="notice-banner"><span className="notice-icon">i</span><div><strong>Version 2 preview</strong><p>This is the redesigned interface. Workflow actions are local demos until the processing backend is connected.</p></div></section>
-
+        <header className="mobile-header"><a className="brand" href="#overview"><span className="brand-mark">C</span><span>cliptube <b>SI</b></span></a><button className="signout-button" onClick={()=>supabase.auth.signOut()}>Sign out</button></header>
+        <header className="page-header"><div><div className="eyebrow">YOUR CONTENT WORKSPACE</div><h1>Overview</h1><p>Discover videos, save authorised sources and manage your workflows.</p></div><div className="header-status"><span className="status-dot"/> ACCOUNT CONNECTED</div></header>
+        <section className="notice-banner"><span className="notice-icon">i</span><div><strong>Processing worker required</strong><p>Discovery, authentication, workflow storage and job controls are connected. Transcription, clip rendering, subtitle burning and publishing remain disabled until a separate video worker and Google OAuth credentials are configured. Public discovery never downloads videos.</p></div></section>
+        {error && <div className="search-error" role="alert">{error}</div>}
+        {message && <div className="inline-notice" role="status">{message}</div>}
         <section className="stats-grid" aria-label="Workspace metrics">
-          {[["Videos discovered","—","Metadata discovery not connected"],["Clips created","—","Clip rendering not connected"],["Shorts published","—","Publishing not connected"],["Views tracked","—","Analytics not connected"]].map(([title,value,caption]) => <article className="stat-card" key={title}><span>{title}</span><strong>{value}</strong><small>{caption}</small></article>)}
+          {[[ "Videos discovered", metrics.videosDiscovered, "Saved to your account" ],[ "Clips created", metrics.clipsCreated, "Completed render jobs" ],[ "Shorts published", metrics.shortsPublished, "Published from connected channel" ],[ "Views tracked", metrics.viewsTracked, "Views recorded for published clips" ]].map(([label,value,caption])=><article className="stat-card" key={String(label)}><span>{label}</span><strong>{value}</strong><small>{caption}</small></article>)}
         </section>
-
-        <div className="section-heading" id="workflow"><div><div className="eyebrow">GET STARTED</div><h2>Build a workflow</h2><p>Choose a topic and set your discovery preferences.</p></div><span className="step-label">STEP 01 / 03</span></div>
+        <div className="section-heading" id="workflow"><div><div className="eyebrow">STEP 01 / 03</div><h2>Build a workflow</h2><p>Save your niche and an authorised source video.</p></div></div>
         <section className="workspace-grid">
           <article className="panel workflow-panel">
-            <div className="panel-heading"><div><span className="panel-kicker">WORKFLOW SETUP</span><h3>Discovery preferences</h3></div><span className="draft-tag">NEW DRAFT</span></div>
-            <label className="field-label" htmlFor="niche">What topic should we look for?</label>
-            <input id="niche" className="field" value={form.niche} onChange={e => setForm({...form, niche:e.target.value})} placeholder="e.g. Football, gaming, technology" maxLength={80}/>
-            <div className="field-row">
-              <div><label className="field-label" htmlFor="country">Target region</label><select id="country" className="field" value={form.country} onChange={e => setForm({...form,country:e.target.value})}><option>Worldwide</option><option>United States</option><option>United Kingdom</option><option>Nigeria</option><option>Canada</option><option>India</option></select></div>
-              <div><label className="field-label" htmlFor="limit">Discovery target</label><select id="limit" className="field" value={form.limit} onChange={e => setForm({...form,limit:Number(e.target.value)})}><option value={5}>5 videos</option><option value={10}>10 videos</option><option value={20}>20 videos</option><option value={50}>50 videos</option></select></div>
-            </div>
-            <div className="divider" />
-            <div className="field-label">Optional source video URL</div>
-            <input className="field" aria-label="Optional source video URL" value={form.sourceUrl} onChange={e => setForm({...form,sourceUrl:e.target.value})} placeholder="https://www.youtube.com/watch?v=..." inputMode="url"/>
-            <div className="field-hint">Only submit videos you own, have licensed, or have explicit permission to process. Public discovery is metadata-only.</div>
-            <label className="permission-row"><input type="checkbox" checked={permissionConfirmed} onChange={e => setPermissionConfirmed(e.target.checked)}/><span>I will only process content I own or am authorised to use.</span></label>
-            <button className="primary-button" onClick={discoverVideos} disabled={!canSave || searching}>{searching ? "Searching YouTube…" : "Discover public videos"} <span>⌕</span></button>
-            <p className="button-note">Searches public YouTube metadata only. It does not download or process videos.</p>
-            <button className="secondary-button" onClick={saveDraft} disabled={!canSave || !permissionConfirmed}>Save workflow draft <span>→</span></button>
-            <p className="button-note">Saves locally for this preview. No video is downloaded or processed.</p>
+            <div className="panel-heading"><div><span className="panel-kicker">WORKFLOW SETUP</span><h3>Discovery preferences</h3></div><span className="draft-tag">ACCOUNT-SAVED</span></div>
+            <label className="field-label" htmlFor="niche">Topic or niche</label><input id="niche" className="field" value={niche} onChange={e=>setNiche(e.target.value)} placeholder="Football, gaming, technology" maxLength={80}/>
+            <div className="field-row"><div><label className="field-label" htmlFor="country">Target region</label><select id="country" className="field" value={country} onChange={e=>setCountry(e.target.value)}><option>Worldwide</option><option>United States</option><option>United Kingdom</option><option>Nigeria</option><option>Canada</option><option>India</option><option>Australia</option><option>South Africa</option></select></div><div><label className="field-label" htmlFor="limit">Discovery target</label><select id="limit" className="field" value={limit} onChange={e=>setLimit(Number(e.target.value))}><option value={5}>5 videos</option><option value={10}>10 videos</option><option value={20}>20 videos</option><option value={50}>50 videos</option></select></div></div>
+            <div className="divider"/>
+            <label className="field-label" htmlFor="source">Source video URL (required before processing)</label><input id="source" className="field" value={sourceUrl} onChange={e=>setSourceUrl(e.target.value)} placeholder="https://www.youtube.com/watch?v=…" inputMode="url"/>
+            <div className="field-hint">Only provide content you own, have licensed, or have explicit permission to process.</div>
+            <label className="permission-row"><input type="checkbox" checked={permission} onChange={e=>setPermission(e.target.checked)}/><span>I own this video or have permission to process it.</span></label>
+            <button className="primary-button" onClick={discover} disabled={busy || niche.trim().length<2}>{busy ? "Working…" : "Discover public videos"} <span>⌕</span></button>
+            <p className="button-note">Uses YouTube Data API metadata only.</p>
+            <button className="secondary-button" onClick={saveWorkflow} disabled={busy || niche.trim().length<2}>Save workflow to account <span>→</span></button>
+            <p className="button-note">Creates a real draft in Supabase. It does not start video processing.</p>
           </article>
-
-          <aside className="panel summary-panel">
-            <div className="panel-heading"><div><span className="panel-kicker">LIVE PREVIEW</span><h3>Workflow summary</h3></div><span className="preview-icon">◈</span></div>
-            <div className="summary-topic"><span className="summary-label">TOPIC</span><strong>{form.niche.trim() || "Your topic will appear here"}</strong></div>
-            <div className="summary-line"><span>Target region</span><strong>{form.country}</strong></div>
-            <div className="summary-line"><span>Discovery target</span><strong>{form.limit} videos</strong></div>
-            <div className="summary-line"><span>Source</span><strong className="source-value">{sourceHost}</strong></div>
-            <div className="summary-line"><span>Permission declaration</span><strong className={permissionConfirmed ? "good-text" : "muted-text"}>{permissionConfirmed ? "Confirmed" : "Not confirmed"}</strong></div>
-            <div className="summary-footer"><span className="status-dot" /> {saved ? "Draft saved in this session" : "Waiting for setup"}</div>
-          </aside>
+          <aside className="panel summary-panel"><div className="panel-heading"><div><span className="panel-kicker">WORKFLOW SUMMARY</span><h3>Current setup</h3></div></div><div className="summary-topic"><span className="summary-label">TOPIC</span><strong>{niche || "Your topic appears here"}</strong></div><div className="summary-line"><span>Region</span><strong>{country}</strong></div><div className="summary-line"><span>Discovery target</span><strong>{limit} videos</strong></div><div className="summary-line"><span>Source URL</span><strong className="source-value">{sourceUrl ? "Added" : "Not added"}</strong></div><div className="summary-line"><span>Permission</span><strong className={permission?"good-text":"muted-text"}>{permission?"Confirmed":"Not confirmed"}</strong></div></aside>
         </section>
-
-        <section className="panel results-panel" aria-live="polite">
-          <div className="panel-heading"><div><span className="panel-kicker">YOUTUBE DATA API V3</span><h3>Discovery results</h3><p>{searchedFor ? `Public videos matching “${searchedFor}”` : "Search a topic to retrieve real public YouTube video metadata."}</p></div><span className="empty-count">{videos.length} RESULTS</span></div>
-          {searching && <div className="search-state">Searching YouTube…</div>}
-          {searchError && <div className="search-error" role="alert">{searchError}</div>}
-          {!searching && !searchError && videos.length === 0 && <div className="search-state">Your search results will appear here.</div>}
-          {videos.length > 0 && <div className="video-results">{videos.map(video => <article className="video-result" key={video.videoId}>
-            <a className="video-thumb" href={video.url} target="_blank" rel="noreferrer"><img src={video.thumbnail} alt="" loading="lazy"/><span>▶</span></a>
-            <div className="video-info"><a href={video.url} target="_blank" rel="noreferrer" className="video-title">{video.title}</a><div className="video-channel">{video.channelTitle} · {new Date(video.publishedAt).toLocaleDateString()}</div><p>{video.description || "No description provided."}</p><a className="video-open" href={video.url} target="_blank" rel="noreferrer">Open on YouTube ↗</a></div>
-          </article>)}</div>}
+        <section className="panel results-panel" id="discovery">
+          <div className="panel-heading"><div><span className="panel-kicker">YOUTUBE DATA API V3</span><h3>Discovery results</h3><p>{searched ? `Public videos matching “${searched}”` : "Search to find public metadata. Choose a result to use as your source URL."}</p></div><span className="empty-count">{videos.length} RESULTS</span></div>
+          {!videos.length ? <div className="search-state">No results loaded yet. Search a topic above.</div> : <div className="video-results">{videos.map(video=><article className="video-result" key={video.videoId}><a className="video-thumb" href={video.url} target="_blank" rel="noreferrer"><img src={video.thumbnail} alt="" loading="lazy"/><span>▶</span></a><div className="video-info"><a href={video.url} target="_blank" rel="noreferrer" className="video-title">{video.title}</a><div className="video-channel">{video.channelTitle} · {new Date(video.publishedAt).toLocaleDateString()}</div><p>{video.description || "No description provided."}</p><button className="select-source-button" onClick={()=>{setSourceUrl(video.url);setPermission(false);setMessage("Source selected. Confirm ownership or permission before submitting it for processing.");}}>Use as source URL</button></div></article>)}</div>}
         </section>
-
-        <section className="panel controls-panel" id="sources">
-          <div className="panel-heading"><div><span className="panel-kicker">CONTROL CENTRE</span><h3>Workflow controls</h3><p>These buttons demonstrate the intended control states only.</p></div><span className="demo-pill">DEMO</span></div>
-          <div className="control-buttons"><button onClick={() => demoStatus("Running (demo)")}>▶ Start demo</button><button onClick={() => demoStatus("Paused (demo)")}>Ⅱ Pause</button><button onClick={() => demoStatus("Running (demo)")}>↻ Resume</button><button className="stop-button" onClick={() => demoStatus("Stopped")}>■ Stop</button></div>
-          <div className="inline-notice" role="status">{notice}</div>
+        <section className="panel controls-panel"><div className="panel-heading"><div><span className="panel-kicker">WORKFLOW CONTROLS</span><h3>Saved workflows</h3><p>Start remains locked until the video-processing worker is deployed.</p></div><span className="demo-pill">LIVE DATA</span></div>
+          {!jobs.length ? <div className="search-state">No workflows saved yet.</div> : <div className="job-list">{jobs.map(job=><article className="job-row" key={job.id}><div><strong>{job.config?.niche || "Workflow"}</strong><p>{job.status} · {job.stage} · {new Date(job.created_at).toLocaleString()}</p>{job.source_video_url && <a href={job.source_video_url} target="_blank" rel="noreferrer">Open source video ↗</a>}</div><div className="job-actions"><button onClick={()=>controlJob(job.id,"start")} disabled={job.status!=="draft"}>Start</button><button onClick={()=>controlJob(job.id,"stop")} disabled={["cancelled","completed"].includes(job.status)}>Stop</button></div></article>)}</div>}
         </section>
-
-        <section className="panel activity-panel" id="activity"><div className="panel-heading"><div><span className="panel-kicker">LATEST UPDATES</span><h3>Recent activity</h3></div><span className="empty-count">0 EVENTS</span></div><div className="empty-state"><div className="empty-symbol">⌁</div><strong>Your activity will show here</strong><p>No real discovery or processing jobs have run yet.</p></div></section>
-        <footer className="footer">CLIPTUBE SI <span>•</span> VERSION 2 PREVIEW <span>•</span> BUILT FOR MOBILE</footer>
+        <section className="panel activity-panel" id="activity"><div className="panel-heading"><div><span className="panel-kicker">LATEST UPDATES</span><h3>Recent activity</h3></div><span className="empty-count">{jobs.length} WORKFLOWS</span></div>{!jobs.length?<div className="empty-state"><strong>Your activity will show here</strong><p>Saved workflows and future processing events will appear here.</p></div>:<div className="job-list">{jobs.slice(0,8).map(job=><div className="activity-row" key={job.id}><span className="status-dot"/><div><strong>{job.config?.niche || "Workflow"} — {job.status}</strong><p>{job.stage} · {new Date(job.created_at).toLocaleString()}</p></div></div>)}</div>}</section>
+        <footer className="footer">CLIPTUBE SI <span>•</span> ACCOUNT CONNECTED <span>•</span> VIDEO WORKER PENDING</footer>
       </section>
-
-      <nav className="mobile-nav" aria-label="Mobile navigation">{nav.map((item,i)=><a key={item} href={`#${item.toLowerCase()}`} className={activeTab===item?"mobile-nav-item selected":"mobile-nav-item"} onClick={()=>setActiveTab(item)}><span>{["⌂","◈","◎","≡"][i]}</span>{item}</a>)}</nav>
+      <nav className="mobile-nav"><a className="mobile-nav-item selected" href="#overview"><span>⌂</span>Overview</a><a className="mobile-nav-item" href="#workflow"><span>◈</span>Workflow</a><a className="mobile-nav-item" href="#discovery"><span>◎</span>Discovery</a><a className="mobile-nav-item" href="#activity"><span>≡</span>Activity</a></nav>
     </main>
   );
 }
