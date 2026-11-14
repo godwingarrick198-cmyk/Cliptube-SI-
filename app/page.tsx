@@ -121,7 +121,19 @@ export default function Home() {
     finally { setBusy(false); }
   }
 
-  async function connectYouTube() {\n    setError(""); setMessage("");\n    try { const data = await api("/api/youtube/connect", { method: "POST", body: "{}" }); window.location.assign(data.url); }\n    catch (e) { setError(e instanceof Error ? e.message : "Could not start YouTube connection."); }\n  }\n\n  async function reviewClip(id: string, action: "approve" | "reject") {\n    setError(""); setMessage("");\n    try { await api(`/api/clips/${id}`, { method: "PATCH", body: JSON.stringify({ action }) }); setMessage(action === "approve" ? "Clip approved. The worker will publish it as Unlisted." : "Clip rejected."); await loadData(); }\n    catch (e) { setError(e instanceof Error ? e.message : "Could not update clip."); }\n  }\n\n  async function controlJob(id: string, action: string) {
+  async function connectYouTube() {
+    setError(""); setMessage("");
+    try { const data = await api("/api/youtube/connect", { method: "POST", body: "{}" }); window.location.assign(data.url); }
+    catch (e) { setError(e instanceof Error ? e.message : "Could not start YouTube connection."); }
+  }
+
+  async function reviewClip(id: string, action: "approve" | "reject") {
+    setError(""); setMessage("");
+    try { await api(`/api/clips/${id}`, { method: "PATCH", body: JSON.stringify({ action }) }); setMessage(action === "approve" ? "Clip approved. The worker will publish it as Unlisted." : "Clip rejected."); await loadData(); }
+    catch (e) { setError(e instanceof Error ? e.message : "Could not update clip."); }
+  }
+
+  async function controlJob(id: string, action: string) {
     setError(""); setMessage("");
     try {
       await api(`/api/workflows/${id}`, { method: "PATCH", body: JSON.stringify({ action }) });
