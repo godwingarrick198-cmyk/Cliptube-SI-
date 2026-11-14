@@ -19,10 +19,10 @@ export async function PATCH(request: NextRequest, context: { params: Promise<{ i
   const next = transitions[action];
   if (!next) return NextResponse.json({ error: "Unsupported workflow action." }, { status: 400 });
   const { data: existing, error: readError } = await auth.supabase.from("processing_jobs")
-    .select("id,status,source_video_url,permission_confirmed").eq("id", id).single();
+    .select("id,status,source_video_url,source_storage_path,permission_confirmed").eq("id", id).single();
   if (readError || !existing) return NextResponse.json({ error: "Workflow not found." }, { status: 404 });
   if (action === "start" || action === "resume") {
-    if (!existing.source_video_url || existing.permission_confirmed !== true) {
+    if (!existing.source_storage_path || existing.permission_confirmed !== true) {
       return NextResponse.json({ error: "Add a source video you own or are authorised to use, then confirm permission." }, { status: 400 });
     }
     return NextResponse.json({ error: "The processing worker is not connected yet. Your workflow is saved, but transcription and rendering cannot start until a worker is deployed." }, { status: 409 });
