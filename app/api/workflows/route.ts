@@ -23,11 +23,15 @@ export async function POST(request: NextRequest) {
   const limit = Math.min(50, Math.max(1, Number(body.limit) || 10));
   const sourceUrl = String(body.sourceUrl || "").trim();
   const permissionConfirmed = body.permissionConfirmed === true;
+  const sourceStoragePath = String(body.sourceStoragePath || "").trim();
   if (niche.length < 2) return NextResponse.json({ error: "Enter a topic of at least 2 characters." }, { status: 400 });
   if (sourceUrl && !/^https:\/\/(www\.)?(youtube\.com|youtu\.be)\//i.test(sourceUrl)) {
     return NextResponse.json({ error: "Use a valid YouTube video URL." }, { status: 400 });
   }
-  if (sourceUrl && !permissionConfirmed) {
+  if (sourceStoragePath && !sourceStoragePath.startsWith(auth.user.id + "/")) {
+    return NextResponse.json({ error: "Invalid uploaded source file." }, { status: 400 });
+  }
+  if (sourceStoragePath && !permissionConfirmed) {
     return NextResponse.json({ error: "Confirm that you own or are authorised to process this video." }, { status: 400 });
   }
   const { data: nicheRow, error: nicheError } = await auth.supabase.from("niches")
@@ -35,7 +39,7 @@ export async function POST(request: NextRequest) {
   if (nicheError || !nicheRow) return NextResponse.json({ error: "Could not save this topic." }, { status: 500 });
   const { data, error } = await auth.supabase.from("processing_jobs").insert({
     user_id: auth.user.id, niche_id: nicheRow.id, status: "draft", stage: "configured",
-    progress: 0, source_video_url: sourceUrl || null, permission_confirmed: permissionConfirmed,
+    progress: 0, source_video_url: sourceUrl || null, source_storage_path: sourceStoragePath || null, permission_confirmed: permissionConfirmed,
     config: { niche, country, limit, pipeline: ["transcription", "moment_detection", "clip_rendering", "subtitles", "review", "publishing"] },
   }).select("id,status,stage,progress,source_video_url,permission_confirmed,config,created_at").single();
   if (error || !data) return NextResponse.json({ error: "Could not save the workflow." }, { status: 500 });
