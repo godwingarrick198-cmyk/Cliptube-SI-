@@ -1,38 +1,38 @@
-# Cliptube SI video worker
+# Cliptube SI background worker
 
-This worker runs separately from Vercel. The repository includes a scheduled GitHub Actions runner (`.github/workflows/cliptube-worker.yml`) that checks for work every five minutes. Because this repository is public, standard GitHub-hosted runner usage is free under GitHub's public-repository policy. The Dockerfile is an alternative for a persistent host.
+This worker runs outside Vercel because FFmpeg and Whisper are long-running workloads. The repository includes a scheduled GitHub Actions runner in `.github/workflows/cliptube-worker.yml`. It checks the queue every five minutes. This repository is public, so standard GitHub-hosted Actions runners are free for public-repository usage.
 
-## What it does
+## Pipeline
 
-1. Polls Supabase for authorised jobs with status `queued`.
-2. Claims a job by changing its status to `processing`.
-3. Downloads only the user's private upload from the `source-videos` bucket.
-4. Transcribes speech with faster-whisper.
-5. Ranks transcript windows for likely highlights.
-6. Renders up to three vertical 1080×1920 MP4 clips with burned-in subtitles.
-7. Uploads clips to the private `rendered-clips` bucket and creates review records.
-8. Marks the job `awaiting_approval` for user review.\n9. Publishes only user-approved clips to YouTube as **Unlisted**.\n10. Refreshes published Short view counts hourly.
+1. Claims a queued job for the authenticated user.
+2. Downloads only that user's private upload from Supabase Storage (`source-videos`).
+3. Transcribes speech with faster-whisper.
+4. Scores transcript windows and selects up to three 22–58 second highlights.
+5. Renders vertical 1080×1920 MP4 clips with burned-in subtitles using FFmpeg.
+6. Uploads clips to the private `rendered-clips` bucket.
+7. Adds review records and marks the job `awaiting_approval`.
+8. Publishes only clips explicitly approved by the user to YouTube as **Unlisted**.
+9. Refreshes published Short view counts through YouTube Data API.
 
-Public YouTube search results are metadata only. This worker does not download YouTube URLs.
+Public YouTube discovery is metadata-only. The worker does not download videos from YouTube. Users must upload source media they own or are authorised to process.
 
-## Required environment variables
+## GitHub Actions secrets
+
+Open the repository's **Settings → Secrets and variables → Actions** and add:
 
 - `SUPABASE_URL`
-- `SUPABASE_SERVICE_ROLE_KEY` — server-side secret only; never put this in Vercel's public variables or browser code.\n- `GOOGLE_CLIENT_ID`\n- `GOOGLE_CLIENT_SECRET`\n- `GOOGLE_TOKEN_ENCRYPTION_KEY` — the same base64-encoded 32-byte key used by the web app to encrypt refresh tokens.
-- Optional: `WORKER_POLL_SECONDS` (default 12), `WHISPER_MODEL` (default base), `MAX_CLIPS_PER_VIDEO` (default 3).
+- `SUPABASE_SERVICE_ROLE_KEY` — server-only secret; never expose it in browser code.
+- `GOOGLE_CLIENT_ID`
+- `GOOGLE_CLIENT_SECRET`
+- `GOOGLE_TOKEN_ENCRYPTION_KEY` — the same base64-encoded 32-byte key configured in Vercel.
 
-## Run with GitHub Actions (zero-upfront-cost path)
+Then open **Actions → Cliptube SI background worker → Run workflow** once. After that, the schedule checks for work every five minutes.
 
-Add these repository Actions secrets under Settings → Secrets and variables → Actions: `SUPABASE_URL`, `SUPABASE_SERVICE_ROLE_KEY`, `GOOGLE_CLIENT_ID`, `GOOGLE_CLIENT_SECRET`, and `GOOGLE_TOKEN_ENCRYPTION_KEY`. Then run the workflow once manually or wait for its five-minute schedule. The runner handles one queued clip job or one approved upload per run. The worker needs FFmpeg and CPU/RAM for faster-whisper; it is intentionally not run inside Vercel serverless functions.
+## Limits
 
-## Alternative Docker run
-
-Build the Docker image and run it on a persistent container host with the same environment variables.
-
-## Current limitations
-
-- CPU transcription is slower than GPU.
-- Highlight ranking is transcript heuristics, not a trained viral-moment predictor.
-- Only speech-containing videos are handled in this initial worker.
-- Publishing requires a connected Google OAuth account and the matching OAuth secrets in GitHub Actions.
-- Keep the source-video upload under the configured 50 MB bucket limit.
+- Source uploads are limited to 50 MB by the configured Supabase Storage bucket.
+- The first version requires speech/audio and uses transcript heuristics, not a trained viral-moment predictor.
+- CPU transcription speed depends on the GitHub runner and source duration.
+- Approved uploads are Unlisted by default; users can change visibility in YouTube Studio.
+- Vercel serverless functions are not used for video rendering.
+- The Dockerfile is available for a persistent container host if a different worker host is preferred.
