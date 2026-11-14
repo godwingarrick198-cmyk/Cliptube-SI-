@@ -1,4 +1,5 @@
 import { NextRequest, NextResponse } from "next/server";
+import { getAuthenticatedUser } from "../../../../lib/supabase-request";
 
 export const runtime = "nodejs";
 export const dynamic = "force-dynamic";
@@ -6,6 +7,8 @@ export const dynamic = "force-dynamic";
 const allowedRegions = new Set(["US", "GB", "NG", "CA", "IN", "AU", "ZA"]);
 
 export async function GET(request: NextRequest) {
+  const auth = await getAuthenticatedUser(request);
+  if (!auth) return NextResponse.json({ error: "Sign in before searching YouTube." }, { status: 401 });
   const apiKey = process.env.YOUTUBE_API_KEY;
   if (!apiKey) {
     return NextResponse.json({ error: "YouTube discovery is not configured on the server yet." }, { status: 503 });
