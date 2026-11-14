@@ -1,6 +1,6 @@
 # Cliptube SI video worker
 
-This is a separate Docker worker. Do not run FFmpeg or Whisper inside Vercel serverless functions.
+This worker runs separately from Vercel. The repository includes a scheduled GitHub Actions runner (`.github/workflows/cliptube-worker.yml`) that checks for work every five minutes. Because this repository is public, standard GitHub-hosted runner usage is free under GitHub's public-repository policy. The Dockerfile is an alternative for a persistent host.
 
 ## What it does
 
@@ -21,14 +21,18 @@ Public YouTube search results are metadata only. This worker does not download Y
 - `SUPABASE_SERVICE_ROLE_KEY` — server-side secret only; never put this in Vercel's public variables or browser code.\n- `GOOGLE_CLIENT_ID`\n- `GOOGLE_CLIENT_SECRET`\n- `GOOGLE_TOKEN_ENCRYPTION_KEY` — the same base64-encoded 32-byte key used by the web app to encrypt refresh tokens.
 - Optional: `WORKER_POLL_SECONDS` (default 12), `WHISPER_MODEL` (default base), `MAX_CLIPS_PER_VIDEO` (default 3).
 
-## Run
+## Run with GitHub Actions (zero-upfront-cost path)
 
-Build the Docker image and run it on a persistent container host with the environment variables above. The worker needs FFmpeg and enough RAM/CPU for faster-whisper. The free Vercel serverless runtime is not suitable for this long-running process.
+Add these repository Actions secrets under Settings → Secrets and variables → Actions: `SUPABASE_URL`, `SUPABASE_SERVICE_ROLE_KEY`, `GOOGLE_CLIENT_ID`, `GOOGLE_CLIENT_SECRET`, and `GOOGLE_TOKEN_ENCRYPTION_KEY`. Then run the workflow once manually or wait for its five-minute schedule. The runner handles one queued clip job or one approved upload per run. The worker needs FFmpeg and CPU/RAM for faster-whisper; it is intentionally not run inside Vercel serverless functions.
+
+## Alternative Docker run
+
+Build the Docker image and run it on a persistent container host with the same environment variables.
 
 ## Current limitations
 
 - CPU transcription is slower than GPU.
 - Highlight ranking is transcript heuristics, not a trained viral-moment predictor.
 - Only speech-containing videos are handled in this initial worker.
-- Clip review and YouTube OAuth publishing are separate steps; this worker deliberately stops at approval.
+- Publishing requires a connected Google OAuth account and the matching OAuth secrets in GitHub Actions.
 - Keep the source-video upload under the configured 50 MB bucket limit.
