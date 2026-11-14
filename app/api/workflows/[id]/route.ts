@@ -21,6 +21,13 @@ export async function PATCH(request: NextRequest, context: { params: Promise<{ i
   const { data: existing, error: readError } = await auth.supabase.from("processing_jobs")
     .select("id,status,source_video_url,source_storage_path,permission_confirmed").eq("id", id).single();
   if (readError || !existing) return NextResponse.json({ error: "Workflow not found." }, { status: 404 });
+  const allowedFrom: Record<string, string[]> = {
+    start: ["draft"], pause: ["queued", "processing", "running"],
+    resume: ["paused"], stop: ["draft", "queued", "processing", "running", "paused", "awaiting_approval"],
+  };
+  if (!allowedFrom[action]?.includes(existing.status)) {
+    return NextResponse.json({ error: `Cannot ${action} a workflow while it is ${existing.status}.` }, { status: 409 });
+  }
   if (action === "start" || action === "resume") {
     if (!existing.source_storage_path || existing.permission_confirmed !== true) {
       return NextResponse.json({ error: "Upload a source video you own or are authorised to use, then confirm permission." }, { status: 400 });
