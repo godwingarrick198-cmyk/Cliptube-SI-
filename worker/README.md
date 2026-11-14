@@ -20,7 +20,6 @@ Public YouTube discovery is metadata-only. The worker does not download videos f
 
 Open the repository's **Settings → Secrets and variables → Actions** and add:
 
-- `SUPABASE_URL`
 - `SUPABASE_SERVICE_ROLE_KEY` — server-only secret; never expose it in browser code.
 - `GOOGLE_CLIENT_ID`
 - `GOOGLE_CLIENT_SECRET`
