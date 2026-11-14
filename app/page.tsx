@@ -70,7 +70,12 @@ export default function Home() {
     return () => { alive = false; listener.subscription.unsubscribe(); };
   }, []);
 
-  useEffect(() => { if (session) loadData(); }, [session, loadData]);
+  useEffect(() => {
+    if (!session) return;
+    loadData();
+    const refreshTimer = window.setInterval(loadData, 30000);
+    return () => window.clearInterval(refreshTimer);
+  }, [session, loadData]);
 
   useEffect(() => {
     const params = new URLSearchParams(window.location.search);
@@ -99,9 +104,8 @@ export default function Home() {
     try {
       const params = new URLSearchParams({ q: niche.trim(), maxResults: String(limit) });
       if (regions[country]) params.set("regionCode", regions[country]);
-      const response = await fetch(`/api/youtube/discover?${params.toString()}`, { cache: "no-store" });
-      const data = await response.json();
-      if (!response.ok) throw new Error(data.error || "YouTube search failed.");
+      const data = await api(`/api/youtube/discover?${params.toString()}`);
+
       setVideos(data.videos || []);
       if (data.videos?.length) {
         try { await api("/api/discovered-videos", { method: "POST", body: JSON.stringify({ videos: data.videos }) }); await loadData(); }
