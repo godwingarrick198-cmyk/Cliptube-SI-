@@ -11,14 +11,14 @@ This is a separate Docker worker. Do not run FFmpeg or Whisper inside Vercel ser
 5. Ranks transcript windows for likely highlights.
 6. Renders up to three vertical 1080×1920 MP4 clips with burned-in subtitles.
 7. Uploads clips to the private `rendered-clips` bucket and creates review records.
-8. Marks the job `awaiting_approval`; it does not auto-publish.
+8. Marks the job `awaiting_approval` for user review.\n9. Publishes only user-approved clips to YouTube as **Unlisted**.\n10. Refreshes published Short view counts hourly.
 
 Public YouTube search results are metadata only. This worker does not download YouTube URLs.
 
 ## Required environment variables
 
 - `SUPABASE_URL`
-- `SUPABASE_SERVICE_ROLE_KEY` — server-side secret only; never put this in Vercel's public variables or browser code.
+- `SUPABASE_SERVICE_ROLE_KEY` — server-side secret only; never put this in Vercel's public variables or browser code.\n- `GOOGLE_CLIENT_ID`\n- `GOOGLE_CLIENT_SECRET`\n- `GOOGLE_TOKEN_ENCRYPTION_KEY` — the same base64-encoded 32-byte key used by the web app to encrypt refresh tokens.
 - Optional: `WORKER_POLL_SECONDS` (default 12), `WHISPER_MODEL` (default base), `MAX_CLIPS_PER_VIDEO` (default 3).
 
 ## Run
