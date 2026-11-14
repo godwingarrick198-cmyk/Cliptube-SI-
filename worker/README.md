@@ -16,6 +16,10 @@ This worker runs outside Vercel because FFmpeg and Whisper are long-running work
 
 Public YouTube discovery is metadata-only. The worker does not download videos from YouTube. Users must upload source media they own or are authorised to process.
 
+## Google OAuth callback URL
+
+Register this exact URI as an Authorized redirect URI in the Google Cloud OAuth web client: `https://cliptube-si.vercel.app/api/youtube/callback`.
+
 ## GitHub Actions secrets
 
 Open the repository's **Settings → Secrets and variables → Actions** and add:
