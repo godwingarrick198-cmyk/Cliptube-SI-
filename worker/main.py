@@ -108,7 +108,7 @@ def process(job: dict[str, Any]) -> None:
     job_id = job["id"]
     claim = supabase.table("processing_jobs").update({
         "status": "processing", "stage": "transcribing", "progress": 5,
-    }).eq("id", job_id).eq("status", "queued").execute()
+    }).eq("id", job_id).eq("status", "queued").select("id").execute()
     if not claim.data:
         return
 
@@ -222,7 +222,7 @@ def publish_approved_clip() -> bool:
     if not response.data:
         return False
     clip = response.data[0]
-    claim = supabase.table("clips").update({"status": "publishing"}).eq("id", clip["id"]).eq("status", "approved").execute()
+    claim = supabase.table("clips").update({"status": "publishing"}).eq("id", clip["id"]).eq("status", "approved").select("id").execute()
     if not claim.data:
         return True
     try:
