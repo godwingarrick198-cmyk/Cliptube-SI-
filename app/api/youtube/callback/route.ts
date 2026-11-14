@@ -46,7 +46,7 @@ export async function GET(request: NextRequest) {
     });
     if (error) return fail("Could not save the encrypted YouTube connection.");
     const response = NextResponse.redirect(new URL("/?youtube=connected", base));
-    response.cookies.delete("cliptube_oauth_state");
+    response.cookies.set("cliptube_oauth_state", "", { httpOnly: true, secure: process.env.NODE_ENV === "production", sameSite: "lax", path: "/api/youtube/callback", maxAge: 0 });
     return response;
   } catch {
     return fail("YouTube connection failed. Check the OAuth settings and try again.");
