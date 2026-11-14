@@ -14,9 +14,11 @@ export function getRequestSupabase(request: NextRequest) {
 }
 
 export async function getAuthenticatedUser(request: NextRequest) {
+  const authorization = request.headers.get("authorization") || "";
+  const token = authorization.startsWith("Bearer ") ? authorization.slice(7) : "";
   const supabase = getRequestSupabase(request);
-  if (!supabase) return null;
-  const { data, error } = await supabase.auth.getUser();
+  if (!supabase || !token) return null;
+  const { data, error } = await supabase.auth.getUser(token);
   if (error || !data.user) return null;
   return { supabase, user: data.user };
 }
