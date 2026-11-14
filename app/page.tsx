@@ -20,6 +20,8 @@ export default function Home() {
   const [country, setCountry] = useState("Worldwide");
   const [limit, setLimit] = useState(10);
   const [sourceUrl, setSourceUrl] = useState("");
+  const [sourceStoragePath, setSourceStoragePath] = useState("");
+  const [uploading, setUploading] = useState(false);
   const [permission, setPermission] = useState(false);
   const [videos, setVideos] = useState<Video[]>([]);
   const [jobs, setJobs] = useState<Job[]>([]);
@@ -92,10 +94,23 @@ export default function Home() {
     finally { setBusy(false); }
   }
 
+  async function uploadSource(file?: File) {
+    if (!file || !session) return;
+    if (!["video/mp4","video/quicktime","video/webm"].includes(file.type)) { setError("Upload an MP4, MOV or WebM video."); return; }
+    if (file.size > 50 * 1024 * 1024) { setError("The free-tier upload limit is 50 MB per source video."); return; }
+    setUploading(true); setError(""); setMessage("");
+    const safeName = file.name.replace(/[^a-zA-Z0-9._-]/g, "-").slice(-90);
+    const path = `${session.user.id}/${Date.now()}-${safeName}`;
+    const { error: uploadError } = await supabase.storage.from("source-videos").upload(path, file, { contentType: file.type, upsert: false });
+    if (uploadError) setError(uploadError.message);
+    else { setSourceStoragePath(path); setMessage("Source video uploaded privately. Confirm permission and save the workflow."); }
+    setUploading(false);
+  }
+
   async function saveWorkflow() {
     setBusy(true); setError(""); setMessage("");
     try {
-      const data = await api("/api/workflows", { method: "POST", body: JSON.stringify({ niche, country, limit, sourceUrl, permissionConfirmed: permission }) });
+      const data = await api("/api/workflows", { method: "POST", body: JSON.stringify({ niche, country, limit, sourceUrl, sourceStoragePath, permissionConfirmed: permission }) });
       setJobs(current => [data.workflow, ...current]);
       setMessage("Workflow saved to your account. Processing is not started.");
       await loadData();
@@ -160,7 +175,7 @@ export default function Home() {
             <button className="secondary-button" onClick={saveWorkflow} disabled={busy || niche.trim().length<2}>Save workflow to account <span>→</span></button>
             <p className="button-note">Creates a real draft in Supabase. It does not start video processing.</p>
           </article>
-          <aside className="panel summary-panel"><div className="panel-heading"><div><span className="panel-kicker">WORKFLOW SUMMARY</span><h3>Current setup</h3></div></div><div className="summary-topic"><span className="summary-label">TOPIC</span><strong>{niche || "Your topic appears here"}</strong></div><div className="summary-line"><span>Region</span><strong>{country}</strong></div><div className="summary-line"><span>Discovery target</span><strong>{limit} videos</strong></div><div className="summary-line"><span>Source URL</span><strong className="source-value">{sourceUrl ? "Added" : "Not added"}</strong></div><div className="summary-line"><span>Permission</span><strong className={permission?"good-text":"muted-text"}>{permission?"Confirmed":"Not confirmed"}</strong></div></aside>
+          <aside className="panel summary-panel"><div className="panel-heading"><div><span className="panel-kicker">WORKFLOW SUMMARY</span><h3>Current setup</h3></div></div><div className="summary-topic"><span className="summary-label">TOPIC</span><strong>{niche || "Your topic appears here"}</strong></div><div className="summary-line"><span>Region</span><strong>{country}</strong></div><div className="summary-line"><span>Discovery target</span><strong>{limit} videos</strong></div><div className="summary-line"><span>Uploaded source</span><strong className="source-value">{sourceStoragePath ? "Private file ready" : "Not uploaded"}</strong></div><div className="summary-line"><span>Permission</span><strong className={permission?"good-text":"muted-text"}>{permission?"Confirmed":"Not confirmed"}</strong></div></aside>
         </section>
         <section className="panel results-panel" id="discovery">
           <div className="panel-heading"><div><span className="panel-kicker">YOUTUBE DATA API V3</span><h3>Discovery results</h3><p>{searched ? `Public videos matching “${searched}”` : "Search to find public metadata. Choose a result to use as your source URL."}</p></div><span className="empty-count">{videos.length} RESULTS</span></div>
