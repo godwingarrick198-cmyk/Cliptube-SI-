@@ -104,6 +104,13 @@ def render_clip(source: Path, start: float, end: float, segments: list[Any], out
     return " ".join(seg.text.strip() for seg in segments if float(seg.end) > start and float(seg.start) < end)
 
 
+
+def job_should_continue(job_id: str) -> bool:
+    response = supabase.table("processing_jobs").select("status").eq("id", job_id).single().execute()
+    status = response.data.get("status") if response.data else "cancelled"
+    return status not in ("paused", "cancelled", "stopped", "failed")
+
+
 def process(job: dict[str, Any]) -> None:
     job_id = job["id"]
     claim = supabase.table("processing_jobs").update({
@@ -117,16 +124,19 @@ def process(job: dict[str, Any]) -> None:
         if not path or not job.get("permission_confirmed"):
             raise RuntimeError("A private source upload and permission confirmation are required.")
         with tempfile.TemporaryDirectory(prefix="cliptube-") as temp:
+            if not job_should_continue(job_id): return
             root = Path(temp)
             source = root / "source-video"
             payload = supabase.storage.from_("source-videos").download(path)
             source.write_bytes(payload)
 
+            if not job_should_continue(job_id): return
             update_job(job_id, stage="transcribing", progress=12)
             segments_iter, info = model.transcribe(str(source), vad_filter=True, word_timestamps=False)
             segments = list(segments_iter)
             if not segments:
                 raise RuntimeError("No speech was detected. This first worker version requires spoken audio.")
+            if not job_should_continue(job_id): return
             update_job(job_id, stage="detecting_moments", progress=38)
             moments = detect_moments(segments)
             if not moments:
@@ -135,6 +145,7 @@ def process(job: dict[str, Any]) -> None:
             config = job.get("config") or {}
             niche = str(config.get("niche") or "Video highlight")
             for index, (start, end, transcript) in enumerate(moments, start=1):
+                if not job_should_continue(job_id): return
                 update_job(job_id, stage=f"rendering_clip_{index}", progress=40 + int(index / len(moments) * 45))
                 output = root / f"clip-{index}.mp4"
                 subtitle = root / f"clip-{index}.srt"
@@ -152,7 +163,8 @@ def process(job: dict[str, Any]) -> None:
                     "storage_path": storage_path,
                 }).execute()
 
-            update_job(job_id, status="awaiting_approval", stage="clips_ready_for_review", progress=100)
+            if job_should_continue(job_id):
+                update_job(job_id, status="awaiting_approval", stage="clips_ready_for_review", progress=100)
     except Exception as exc:
         update_job(job_id, status="failed", stage="failed", error_message=str(exc)[:1000])
 
