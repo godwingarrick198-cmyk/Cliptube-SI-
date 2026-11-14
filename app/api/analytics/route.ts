@@ -9,7 +9,7 @@ export async function GET(request: NextRequest) {
   const [videos, jobs, clips] = await Promise.all([
     auth.supabase.from("discovered_videos").select("id", { count: "exact", head: true }),
     auth.supabase.from("processing_jobs").select("id,status,stage,progress,created_at,updated_at").order("created_at", { ascending: false }).limit(50),
-    auth.supabase.from("clips").select("id,status,view_count", { count: "exact" }),
+    auth.supabase.from("clips").select("id,status,view_count,youtube_video_id", { count: "exact" }),
   ]);
   if (videos.error || jobs.error || clips.error) return NextResponse.json({ error: "Analytics could not be loaded." }, { status: 500 });
   const completedClips = (clips.data || []).filter((clip: any) => clip.status === "completed").length;
