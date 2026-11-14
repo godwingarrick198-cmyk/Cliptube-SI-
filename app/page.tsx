@@ -49,9 +49,13 @@ export default function Home() {
   const loadData = useCallback(async () => {
     if (!session) return;
     try {
-      const [workflowData, analyticsData] = await Promise.all([api("/api/workflows"), api("/api/analytics")]);
+      const [workflowData, analyticsData, clipData, channelData] = await Promise.all([
+        api("/api/workflows"), api("/api/analytics"), api("/api/clips"), api("/api/youtube/channel"),
+      ]);
       setJobs(workflowData.workflows || []);
       setMetrics(analyticsData);
+      setClips(clipData.clips || []);
+      setYoutubeChannel(channelData.channel || null);
     } catch (e) {
       setError(e instanceof Error ? e.message : "Could not load your workspace.");
     }
@@ -67,6 +71,16 @@ export default function Home() {
   }, []);
 
   useEffect(() => { if (session) loadData(); }, [session, loadData]);
+
+  useEffect(() => {
+    const params = new URLSearchParams(window.location.search);
+    if (params.get("youtube") === "connected") setMessage("YouTube channel connected successfully.");
+    const oauthError = params.get("youtube_error");
+    if (oauthError) setError(oauthError);
+    if (params.has("youtube") || oauthError) {
+      window.history.replaceState({}, "", window.location.pathname);
+    }
+  }, []);
 
   async function signIn(event: FormEvent) {
     event.preventDefault();
@@ -104,10 +118,15 @@ export default function Home() {
     setUploading(true); setError(""); setMessage("");
     const safeName = file.name.replace(/[^a-zA-Z0-9._-]/g, "-").slice(-90);
     const path = `${session.user.id}/${Date.now()}-${safeName}`;
-    const { error: uploadError } = await supabase.storage.from("source-videos").upload(path, file, { contentType: file.type, upsert: false });
-    if (uploadError) setError(uploadError.message);
-    else { setSourceStoragePath(path); setMessage("Source video uploaded privately. Confirm permission and save the workflow."); }
-    setUploading(false);
+    try {
+      const { error: uploadError } = await supabase.storage.from("source-videos").upload(path, file, { contentType: file.type, upsert: false });
+      if (uploadError) setError(uploadError.message);
+      else { setSourceStoragePath(path); setMessage("Source video uploaded privately. Confirm permission and save the workflow."); }
+    } catch (e) {
+      setError(e instanceof Error ? e.message : "Upload failed. Check your connection and try again.");
+    } finally {
+      setUploading(false);
+    }
   }
 
   async function saveWorkflow() {
@@ -164,12 +183,12 @@ export default function Home() {
         <a className="brand" href="#overview"><span className="brand-mark">C</span><span>cliptube <b>SI</b><small>SHORTS WORKSPACE</small></span></a>
         <div className="side-label">WORKSPACE</div>
         <nav className="side-nav"><a className="nav-item active" href="#overview">⌂ Overview</a><a className="nav-item" href="#workflow">◈ Workflow</a><a className="nav-item" href="#discovery">◎ Discovery</a><a className="nav-item" href="#activity">≡ Activity</a></nav>
-        <div className="sidebar-bottom"><div className="plan-card"><span className="plan-dot"/> LIVE WORKSPACE<p>Account connected</p><small>Processing worker is not deployed yet.</small></div><div className="profile"><div className="avatar">{session.user.email?.[0]?.toUpperCase() || "U"}</div><div><strong>{session.user.email}</strong><small>Signed in</small></div></div><button className="signout-button" onClick={()=>supabase.auth.signOut()}>Sign out</button></div>
+        <div className="sidebar-bottom"><div className="plan-card"><span className="plan-dot"/> LIVE WORKSPACE<p>Account connected</p><small>GitHub Actions worker configured; repository secrets are still required to activate it.</small></div><div className="profile"><div className="avatar">{session.user.email?.[0]?.toUpperCase() || "U"}</div><div><strong>{session.user.email}</strong><small>Signed in</small></div></div><button className="signout-button" onClick={()=>supabase.auth.signOut()}>Sign out</button></div>
       </aside>
       <section className="content" id="overview">
         <header className="mobile-header"><a className="brand" href="#overview"><span className="brand-mark">C</span><span>cliptube <b>SI</b></span></a><button className="signout-button" onClick={()=>supabase.auth.signOut()}>Sign out</button></header>
         <header className="page-header"><div><div className="eyebrow">YOUR CONTENT WORKSPACE</div><h1>Overview</h1><p>Discover videos, save authorised sources and manage your workflows.</p></div><div className="header-status"><span className="status-dot"/> ACCOUNT CONNECTED</div></header>
-        <section className="notice-banner"><span className="notice-icon">i</span><div><strong>Processing pipeline status</strong><p>Discovery, secure sign-in, private source uploads, workflow storage, clip review and encrypted YouTube OAuth are implemented. The separate Docker worker must be deployed to run transcription, highlight detection, FFmpeg rendering and approved publishing. YouTube uploads are configured as Unlisted by default.</p></div></section>\n        <section className="panel channel-panel"><div><span className="panel-kicker">YOUTUBE CHANNEL</span><h3>{youtubeChannel ? `Connected: ${youtubeChannel.channel_title}` : "Connect your YouTube channel"}</h3><p>{youtubeChannel ? "Approved clips will be uploaded as Unlisted by the background worker." : "Connect with Google OAuth to enable publishing after clip review."}</p></div><button className="secondary-button" onClick={connectYouTube}>{youtubeChannel ? "Reconnect YouTube" : "Connect YouTube"} →</button></section>
+        <section className="notice-banner"><span className="notice-icon">i</span><div><strong>Processing pipeline status</strong><p>Discovery, secure sign-in, private source uploads, workflow storage, clip review and encrypted YouTube OAuth are implemented. The separate GitHub Actions worker is configured. Add its required repository secrets to activate transcription, highlight detection, FFmpeg rendering and approved publishing. YouTube uploads are configured as Unlisted by default.</p></div></section>\n        <section className="panel channel-panel"><div><span className="panel-kicker">YOUTUBE CHANNEL</span><h3>{youtubeChannel ? `Connected: ${youtubeChannel.channel_title}` : "Connect your YouTube channel"}</h3><p>{youtubeChannel ? "Approved clips will be uploaded as Unlisted by the background worker." : "Connect with Google OAuth to enable publishing after clip review."}</p></div><button className="secondary-button" onClick={connectYouTube}>{youtubeChannel ? "Reconnect YouTube" : "Connect YouTube"} →</button></section>
         {error && <div className="search-error" role="alert">{error}</div>}
         {message && <div className="inline-notice" role="status">{message}</div>}
         <section className="stats-grid" aria-label="Workspace metrics">
@@ -182,8 +201,11 @@ export default function Home() {
             <label className="field-label" htmlFor="niche">Topic or niche</label><input id="niche" className="field" value={niche} onChange={e=>setNiche(e.target.value)} placeholder="Football, gaming, technology" maxLength={80}/>
             <div className="field-row"><div><label className="field-label" htmlFor="country">Target region</label><select id="country" className="field" value={country} onChange={e=>setCountry(e.target.value)}><option>Worldwide</option><option>United States</option><option>United Kingdom</option><option>Nigeria</option><option>Canada</option><option>India</option><option>Australia</option><option>South Africa</option></select></div><div><label className="field-label" htmlFor="limit">Discovery target</label><select id="limit" className="field" value={limit} onChange={e=>setLimit(Number(e.target.value))}><option value={5}>5 videos</option><option value={10}>10 videos</option><option value={20}>20 videos</option><option value={50}>50 videos</option></select></div></div>
             <div className="divider"/>
-            <label className="field-label" htmlFor="source">Source video URL (required before processing)</label><input id="source" className="field" value={sourceUrl} onChange={e=>setSourceUrl(e.target.value)} placeholder="https://www.youtube.com/watch?v=…" inputMode="url"/>
-            <div className="field-hint">Only provide content you own, have licensed, or have explicit permission to process.</div>
+            <label className="field-label" htmlFor="source">Reference video URL (optional)</label><input id="source" className="field" value={sourceUrl} onChange={e=>setSourceUrl(e.target.value)} placeholder="https://www.youtube.com/watch?v=…" inputMode="url"/>
+            <div className="field-hint">A YouTube URL is saved as a reference only. Cliptube does not download it. To create clips, upload a source video file you own or are authorised to process.</div>
+            <label className="field-label" htmlFor="source-file">Upload your source video (MP4, MOV or WebM · max 50 MB)</label>
+            <input id="source-file" className="field" type="file" accept="video/mp4,video/quicktime,video/webm" disabled={uploading} onChange={e=>uploadSource(e.target.files?.[0])}/>
+            <div className="field-hint">{uploading ? "Uploading securely…" : sourceStoragePath ? "Private source file uploaded and ready." : "No source file uploaded yet."}</div>
             <label className="permission-row"><input type="checkbox" checked={permission} onChange={e=>setPermission(e.target.checked)}/><span>I own this video or have permission to process it.</span></label>
             <button className="primary-button" onClick={discover} disabled={busy || niche.trim().length<2}>{busy ? "Working…" : "Discover public videos"} <span>⌕</span></button>
             <p className="button-note">Uses YouTube Data API metadata only.</p>
@@ -196,8 +218,8 @@ export default function Home() {
           <div className="panel-heading"><div><span className="panel-kicker">YOUTUBE DATA API V3</span><h3>Discovery results</h3><p>{searched ? `Public videos matching “${searched}”` : "Search to find public metadata. Choose a result to use as your source URL."}</p></div><span className="empty-count">{videos.length} RESULTS</span></div>
           {!videos.length ? <div className="search-state">No results loaded yet. Search a topic above.</div> : <div className="video-results">{videos.map(video=><article className="video-result" key={video.videoId}><a className="video-thumb" href={video.url} target="_blank" rel="noreferrer"><img src={video.thumbnail} alt="" loading="lazy"/><span>▶</span></a><div className="video-info"><a href={video.url} target="_blank" rel="noreferrer" className="video-title">{video.title}</a><div className="video-channel">{video.channelTitle} · {new Date(video.publishedAt).toLocaleDateString()}</div><p>{video.description || "No description provided."}</p><button className="select-source-button" onClick={()=>{setSourceUrl(video.url);setPermission(false);setMessage("Source selected. Confirm ownership or permission before submitting it for processing.");}}>Use as source URL</button></div></article>)}</div>}
         </section>
-        <section className="panel controls-panel"><div className="panel-heading"><div><span className="panel-kicker">WORKFLOW CONTROLS</span><h3>Saved workflows</h3><p>Start remains locked until the video-processing worker is deployed.</p></div><span className="demo-pill">LIVE DATA</span></div>
-          {!jobs.length ? <div className="search-state">No workflows saved yet.</div> : <div className="job-list">{jobs.map(job=><article className="job-row" key={job.id}><div><strong>{job.config?.niche || "Workflow"}</strong><p>{job.status} · {job.stage} · {new Date(job.created_at).toLocaleString()}</p>{job.source_video_url && <a href={job.source_video_url} target="_blank" rel="noreferrer">Open source video ↗</a>}</div><div className="job-actions"><button onClick={()=>controlJob(job.id,"start")} disabled={job.status!=="draft"}>Start</button><button onClick={()=>controlJob(job.id,"pause")} disabled={!["queued","processing"].includes(job.status)}>Pause</button><button onClick={()=>controlJob(job.id,"resume")} disabled={job.status!=="paused"}>Resume</button><button onClick={()=>controlJob(job.id,"stop")} disabled={["cancelled","completed","failed"].includes(job.status)}>Stop</button></div></article>)}</div>}
+        <section className="panel controls-panel"><div className="panel-heading"><div><span className="panel-kicker">WORKFLOW CONTROLS</span><h3>Saved workflows</h3><p>Start queues a job for the GitHub Actions worker. The worker needs its repository secrets before it can process jobs.</p></div><span className="demo-pill">LIVE DATA</span></div>
+          {!jobs.length ? <div className="search-state">No workflows saved yet.</div> : <div className="job-list">{jobs.map(job=><article className="job-row" key={job.id}><div><strong>{job.config?.niche || "Workflow"}</strong><p>{job.status} · {job.stage} · {new Date(job.created_at).toLocaleString()}</p>{job.source_video_url && <a href={job.source_video_url} target="_blank" rel="noreferrer">Open source video ↗</a>}</div><div className="job-actions"><button onClick={()=>controlJob(job.id,"start")} disabled={job.status!=="draft" || !job.source_storage_path || !job.permission_confirmed}>Start</button><button onClick={()=>controlJob(job.id,"pause")} disabled={!["queued","processing"].includes(job.status)}>Pause</button><button onClick={()=>controlJob(job.id,"resume")} disabled={job.status!=="paused"}>Resume</button><button onClick={()=>controlJob(job.id,"stop")} disabled={["cancelled","completed","failed"].includes(job.status)}>Stop</button></div></article>)}</div>}
         </section>
         <section className="panel review-panel" id="review"><div className="panel-heading"><div><span className="panel-kicker">HUMAN APPROVAL</span><h3>Clip review & publishing</h3><p>Review each rendered clip before approving an Unlisted YouTube upload.</p></div><span className="empty-count">{clips.length} CLIPS</span></div>{!clips.length ? <div className="search-state">No rendered clips yet. Once the background worker processes a queued upload, clips will appear here.</div> : <div className="clip-review-list">{clips.map(clip=><article className="clip-review-card" key={clip.id}>{clip.previewUrl ? <video controls playsInline preload="metadata" src={clip.previewUrl}/> : <div className="clip-video-placeholder">Preview unavailable</div>}<div className="clip-review-info"><strong>{clip.title}</strong><p>{clip.status} · {clip.start_seconds ?? 0}s–{clip.end_seconds ?? 0}s</p>{clip.transcript && <details><summary>Transcript</summary><p>{clip.transcript}</p></details>}{clip.youtube_video_id && <a href={`https://www.youtube.com/watch?v=${clip.youtube_video_id}`} target="_blank" rel="noreferrer">View published Short ↗</a>}{clip.status === "awaiting_review" && <div className="clip-review-actions"><button onClick={()=>reviewClip(clip.id,"approve")} disabled={!youtubeChannel}>Approve & publish Unlisted</button><button onClick={()=>reviewClip(clip.id,"reject")}>Reject</button></div>}</div></article>)}</div>}</section>\n        <section className="panel activity-panel" id="activity"><div className="panel-heading"><div><span className="panel-kicker">LATEST UPDATES</span><h3>Recent activity</h3></div><span className="empty-count">{jobs.length} WORKFLOWS</span></div>{!jobs.length?<div className="empty-state"><strong>Your activity will show here</strong><p>Saved workflows and future processing events will appear here.</p></div>:<div className="job-list">{jobs.slice(0,8).map(job=><div className="activity-row" key={job.id}><span className="status-dot"/><div><strong>{job.config?.niche || "Workflow"} — {job.status}</strong><p>{job.stage} · {new Date(job.created_at).toLocaleString()}</p></div></div>)}</div>}</section>
         <footer className="footer">CLIPTUBE SI <span>•</span> ACCOUNT CONNECTED <span>•</span> VIDEO WORKER PENDING</footer>
