@@ -5,7 +5,7 @@ import type { Session } from "@supabase/supabase-js";
 import { supabase } from "../lib/supabase";
 
 type Video = { videoId: string; title: string; description: string; channelTitle: string; publishedAt: string; thumbnail: string; url: string };
-type Job = { id: string; status: string; stage: string; progress: number; error_message?: string | null; source_video_url?: string | null; config?: { niche?: string } ; created_at: string };
+type Job = { id: string; status: string; stage: string; progress: number; error_message?: string | null; source_video_url?: string | null; source_storage_path?: string | null; permission_confirmed?: boolean; config?: { niche?: string } ; created_at: string };
 type Clip = { id: string; title: string; status: string; transcript: string | null; start_seconds: number | null; end_seconds: number | null; previewUrl: string | null; youtube_video_id: string | null; created_at: string };
 type Metrics = { videosDiscovered: number; clipsCreated: number; shortsPublished: number; viewsTracked: number; jobs: Job[] };
 
