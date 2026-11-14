@@ -299,6 +299,13 @@ def refresh_published_views() -> None:
 
 def main() -> None:
     print(f"Cliptube worker online; Whisper model={MODEL_NAME}")
+    if os.getenv("RUN_ANALYTICS_ONLY") == "1":
+        try:
+            refresh_published_views()
+        except Exception as exc:
+            print(f"Analytics refresh error: {exc}", flush=True)
+        return
+
     if os.getenv("RUN_ONCE") == "1":
         try:
             response = supabase.table("processing_jobs").select(
@@ -309,7 +316,6 @@ def main() -> None:
                 return
             if publish_approved_clip():
                 return
-            refresh_published_views()
         except Exception as exc:
             print(f"Worker run error: {exc}", flush=True)
         return
