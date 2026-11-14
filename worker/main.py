@@ -24,7 +24,6 @@ GOOGLE_CLIENT_SECRET = os.getenv("GOOGLE_CLIENT_SECRET", "")
 TOKEN_KEY = os.getenv("GOOGLE_TOKEN_ENCRYPTION_KEY", "")
 
 supabase = create_client(SUPABASE_URL, SUPABASE_SERVICE_ROLE_KEY)
-model = WhisperModel(MODEL_NAME, device="cpu", compute_type="int8")
 
 HOOK_WORDS = {
     "unbelievable", "insane", "secret", "mistake", "never", "always",
@@ -137,6 +136,7 @@ def process(job: dict[str, Any]) -> None:
 
             if not job_should_continue(job_id): return
             update_job(job_id, stage="transcribing", progress=12)
+            model = WhisperModel(MODEL_NAME, device="cpu", compute_type="int8")
             segments_iter, info = model.transcribe(str(source), vad_filter=True, word_timestamps=False)
             segments = list(segments_iter)
             if not segments:
@@ -299,6 +299,21 @@ def refresh_published_views() -> None:
 
 def main() -> None:
     print(f"Cliptube worker online; Whisper model={MODEL_NAME}")
+    if os.getenv("RUN_ONCE") == "1":
+        try:
+            response = supabase.table("processing_jobs").select(
+                "id,user_id,status,stage,source_storage_path,permission_confirmed,config"
+            ).eq("status", "queued").order("created_at").limit(1).execute()
+            if response.data:
+                process(response.data[0])
+                return
+            if publish_approved_clip():
+                return
+            refresh_published_views()
+        except Exception as exc:
+            print(f"Worker run error: {exc}", flush=True)
+        return
+
     last_analytics_refresh = 0.0
     while True:
         try:
