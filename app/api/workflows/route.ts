@@ -7,7 +7,7 @@ export async function GET(request: NextRequest) {
   const auth = await getAuthenticatedUser(request);
   if (!auth) return NextResponse.json({ error: "Sign in to view your workflows." }, { status: 401 });
   const { data, error } = await auth.supabase.from("processing_jobs")
-    .select("id,status,stage,progress,error_message,source_video_url,permission_confirmed,config,created_at,updated_at")
+    .select("id,status,stage,progress,error_message,source_video_url,source_storage_path,permission_confirmed,config,created_at,updated_at")
     .order("created_at", { ascending: false }).limit(50);
   if (error) return NextResponse.json({ error: "Could not load workflows." }, { status: 500 });
   return NextResponse.json({ workflows: data || [] }, { headers: { "Cache-Control": "no-store" } });
@@ -41,7 +41,7 @@ export async function POST(request: NextRequest) {
     user_id: auth.user.id, niche_id: nicheRow.id, status: "draft", stage: "configured",
     progress: 0, source_video_url: sourceUrl || null, source_storage_path: sourceStoragePath || null, permission_confirmed: permissionConfirmed,
     config: { niche, country, limit, pipeline: ["transcription", "moment_detection", "clip_rendering", "subtitles", "review", "publishing"] },
-  }).select("id,status,stage,progress,source_video_url,permission_confirmed,config,created_at").single();
+  }).select("id,status,stage,progress,source_video_url,source_storage_path,permission_confirmed,config,created_at").single();
   if (error || !data) return NextResponse.json({ error: "Could not save the workflow." }, { status: 500 });
   return NextResponse.json({ workflow: data }, { status: 201 });
 }
