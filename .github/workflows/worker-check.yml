@@ -1,0 +1,25 @@
+name: Cliptube worker syntax check
+
+on:
+  push:
+    paths:
+      - "worker/**"
+      - ".github/workflows/worker-check.yml"
+  pull_request:
+    paths:
+      - "worker/**"
+      - ".github/workflows/worker-check.yml"
+
+permissions:
+  contents: read
+
+jobs:
+  python-check:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+      - name: Compile worker modules
+        run: python -m py_compile worker/main.py
